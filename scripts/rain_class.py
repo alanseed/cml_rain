@@ -1,14 +1,12 @@
 # Classify the raining periods using the RAINLINK algorithm as a guide
-import pandas as pd
-from pymongo import MongoClient
-import numpy as np
-import pymongo
+from datetime import datetime
 import argparse
-import pathlib
 import os
 import sys
+import numpy as np
+import pymongo
 import pymongo.collection
-from datetime import datetime
+import pandas as pd
 
 
 def valid_date(s: str) -> np.datetime64:
@@ -55,75 +53,137 @@ def get_cmls(
             }
         }
     }
-
-    records = []
-    for doc in cml_col.find(filter=query):
-        record = {
+    projection = {
+        "properties.link_id": 1,
+        "properties.frequency": 1,
+        "properties.length": 1,
+        "properties.midpoint.coordinates": 1,
+    }
+    records = [
+        {
             "link_id": doc["properties"]["link_id"],
             "frequency": float(doc["properties"]["frequency"]["value"]),
             "length": float(doc["properties"]["length"]["value"]),
             "mid_lon": float(doc["properties"]["midpoint"]["coordinates"][0]),
             "mid_lat": float(doc["properties"]["midpoint"]["coordinates"][1]),
         }
-        records.append(record)
+        for doc in cml_col.find(filter=query, projection=projection)
+    ]
 
-    # Convert the list of records to a DataFrame
     cml_df = pd.DataFrame(records)
     return cml_df
 
 
-def cl_rain(
-    cmls: pd.DataFrame,
+def is_valid_power(power: float) -> bool:
+    # Valid range for pmax or pmin
+    max_valid_power = -20
+    min_valid_power = -70
+    if (power >= min_valid_power) & (power <= max_valid_power):
+        return True
+    else:
+        return False
+
+
+def is_raining(
+    link_id: str,
+    neighbours: list,
+    time: datetime,
+    data_col: pymongo.collection.Collection,
+) -> bool:
+    max_rain_power = -55
+    min_raining_neighbours = 3
+    has_rain = False
+
+    # get the valid observations for the links
+    query = {"link_id": {"$in": neighbours}, "end_time": time}
+    records = []
+
+    for doc in data_col.find(
+        filter=query, projection={"link_id": 1, "pmax.value": 1, "_id": 0}
+    ):
+        power = float(doc["pmax"]["value"])
+        if is_valid_power(power):
+            record = {"link_id": doc["link_id"], "power": power}
+            records.append(record)
+
+        if records:
+            print(f"Found {len(records)} valid records")
+            power_df = pd.DataFrame(records)
+
+            # check that the target link has a valid observation
+            if link_id in power_df["link_id"].values:
+
+                # check the number of neighbours with power less than max_rain_power
+                number_with_rain = power_df[power_df["power"] < max_rain_power].count()
+                if number_with_rain >= min_raining_neighbours:
+                    has_rain = True
+    return has_rain
+
+
+def cml_rain(
+    cml: dict,
     cml_col: pymongo.collection.Collection,
     data_col: pymongo.collection.Collection,
     start_time: np.datetime64,
     end_time: np.datetime64,
 ):
-    """Use the RAINLINK algorithm to classify rain in cml data
+    """Use a RAINLINK adjacent algorithm to classify a link with rain 
 
     Args:
-        cmls (pd.DataFrame): links to be classified
-        data_col (pymongo.collection.Collection): Time series cml data
-        start_time (np.datetime64): start time for classification
-        end_time (np.datetime64): end time for classification
+        cml (dict): link to be processed
+        cml_col: (pymongo.collection.Collection): CML metadata
+        data_col: (pymongo.collection.Collection): Time series CML data
+        start_time (np.datetime64): start time for processing
+        end_time (np.datetime64): end time for processing
     """
 
-    # Convert np.datetime64 to Python datetime
+    link_id = cml["link_id"]
+
+    # Get the list of nearest neighbour cmls, including the target cml
+    neighbours = []
+    max_range = 15000
+    mid_lon = cml["mid_lon"]
+    min_lat = cml["mid_lat"]
+    query = {
+        "properties.midpoint": {
+            "$nearSphere": {
+                "$geometry": {"type": "Point", "coordinates": [mid_lon, min_lat]},
+                "$maxDistance": max_range,
+            }
+        }
+    }
+    for doc in cml_col.find(filter=query, projection={"properties.link_id": 1}):
+        neighbours.append(doc["properties"]["link_id"])
+
+    # Set up the times to be processed
     start_time_dt = pd.to_datetime(start_time).to_pydatetime()
     end_time_dt = pd.to_datetime(end_time).to_pydatetime()
+    time_range = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
 
-    # Assume 15 min time steps for now
-    time_step = np.timedelta64(15, "m")
+    # loop over the time steps
+    for time in time_range:
 
-    # Loop over the links
-    for index, row in cmls.iloc[0:1].iterrows():
+        # check that there is a record at this link for this time
+        has_record = data_col.count_documents(
+            filter={"link_id": link_id, "end_time": time}
+        )
+        if has_record == 1:
+            # check if there is rain along this link
+            rain = is_raining(link_id, neighbours, time, data_col)
+            rain_doc = {"rain": rain}
 
-        # Get the neibouring links
-
-        # Get the data for this link
-        records = []
-        query = {
-            "link_id": row["link_id"],
-            "end_time": {"$gte": start_time_dt, "$lte": end_time_dt},
-        }
-        for doc in data_col.find(filter=query):
-            record = {
-                "time": pd.to_datetime(doc["end_time"]),
-                "pmax": doc["pmax"]["value"],
-                "pmin": doc["pmin"]["value"],
-            }
-            records.append(record)
-
-        data_df = pd.DataFrame(records)
-        data_df.set_index("time", inplace=True)
-
-        # get the neibouring stations
+            # append rain_doc to the record
+            data_col.update_one(
+                {"link_id": link_id, "end_time": time},
+                {"$push": {"rain": rain_doc}},
+                upsert=True,
+            )
 
 
 def main():
     """Perform a rain/no-rain classification on link data"""
     parser = argparse.ArgumentParser(
-        description="Clissify rain/no_rain in CML data",
+        description="Classify rain/no_rain in CML data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-s", "--start", type=valid_date, help="Start date yyyy-mm-dd")
@@ -158,8 +218,9 @@ def main():
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
     print(cmls.head())
 
-    # classify rain/no_rain
-    # cl_rain(cmls, cml_col, data_col, args.start, args.end)
+    # process each link
+    for index, row in cmls.iterrows():
+        cml_rain(row, cml_col, data_col, args.start, args.end)
 
 
 if __name__ == "__main__":
