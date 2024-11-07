@@ -31,7 +31,7 @@ def get_cmls(
     records = []
     for doc in cml_col.find(filter=query):
         record = {
-            "link_id": doc["properties"]["link_id"],
+            "link_id": int(doc["properties"]["link_id"]),
             "frequency": float(doc["properties"]["frequency"]["value"]),
             "length": float(doc["properties"]["length"]["value"]),
             "mid_lon": float(doc["properties"]["midpoint"]["coordinates"][0]),

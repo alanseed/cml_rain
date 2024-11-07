@@ -34,7 +34,8 @@ def get_cmls(
     latitude: float,
     max_range: float,
 ) -> pd.DataFrame:
-    """Return the CMLs that are within a radius of a location
+    """
+    Return the CMLs that are within a radius of a location
 
     Args:
         cml_col (pymongo.collection.Collection): Collection of CMLs
@@ -75,7 +76,16 @@ def get_cmls(
 
 
 def is_valid_power(power: float) -> bool:
-    # Valid range for pmax or pmin
+    """
+    Check that the link power is within a valid range
+
+    Args:
+        power (float): Link power to be checked
+
+    Returns:
+        bool: True if within the range 
+    """
+    # Valid range for pmax or pmin based on the PDF of the Netherlands link data
     max_valid_power = -20
     min_valid_power = -70
     if (power >= min_valid_power) & (power <= max_valid_power):
@@ -90,8 +100,25 @@ def is_raining(
     time: datetime,
     data_col: pymongo.collection.Collection,
 ) -> bool:
+    """
+    Use a RAINLINK adjacent algorithm to classify a link as having rain
+
+    A link is deemed to have rain with more than half of the neighbours have
+    power that is below the rain threshold
+
+    The rain threshold is set at the 10 percentile value of the power
+    which is more or less the climatological probability of rain in 15 minutes
+
+    Args:
+        link_id (str): ID of the target link
+        neighbours (list): List of neighbours (including the target)
+        time (datetime): Time stamp for the observation
+        data_col (pymongo.collection.Collection): Mongo DB collection with the time series data
+
+    Returns:
+        bool: True if raining
+    """
     max_rain_power = -55
-    min_raining_neighbours = 3
     has_rain = False
 
     # get the valid observations for the links
@@ -106,17 +133,29 @@ def is_raining(
             record = {"link_id": doc["link_id"], "power": power}
             records.append(record)
 
-        if records:
-            print(f"Found {len(records)} valid records")
-            power_df = pd.DataFrame(records)
+    if records:
+        power_df = pd.DataFrame(records)
 
-            # check that the target link has a valid observation
-            if link_id in power_df["link_id"].values:
+        # check that the target link has a valid observation
+        if link_id in power_df["link_id"].values:
 
-                # check the number of neighbours with power less than max_rain_power
-                number_with_rain = power_df[power_df["power"] < max_rain_power].count()
-                if number_with_rain >= min_raining_neighbours:
-                    has_rain = True
+            number_neighbours = len(record)
+
+            # get the number of links that have power less than max_rain_power
+            # includes the target link
+            number_with_rain = len(power_df[power_df["power"] < max_rain_power])
+
+            # more than half of the neighbours need to be below the rain threshold
+            min_raining_neighbours = 0.5 * number_neighbours
+
+            # use a simple threshold if the target link has rain and here are no neighbours
+            if (number_with_rain == 1) & (number_neighbours <= 2):
+                has_rain = True
+
+            # else check if we have enough neighbouring links with rain
+            # the target link may, or, may not, have rain
+            elif number_with_rain >= min_raining_neighbours:
+                has_rain = True
     return has_rain
 
 
@@ -127,7 +166,10 @@ def cml_rain(
     start_time: np.datetime64,
     end_time: np.datetime64,
 ):
-    """Use a RAINLINK adjacent algorithm to classify a link with rain 
+    """
+    Use a RAINLINK adjacent algorithm to classify a link with rain based on a neighbourhood search
+
+    The neighbourhood is set at 15 km
 
     Args:
         cml (dict): link to be processed
@@ -194,17 +236,18 @@ def main():
     print(f"Start date = {args.start}\nend date = {args.end}")
 
     # set up the database
-    usr = os.getenv("MONGO_USR")
-    pwd = os.getenv("MONGO_PWD")
-    if usr is None:
-        print("Valid MongoDB user not found", file=sys.stderr)
-        sys.exit(1)
-    if pwd is None:
-        print("Valid MongoDB user password not found", file=sys.stderr)
-        sys.exit(1)
+
+    # usr = os.getenv("MONGO_USR")
+    # pwd = os.getenv("MONGO_PWD")
+    # if usr is None:
+    #     print("Valid MongoDB user not found", file=sys.stderr)
+    #     sys.exit(1)
+    # if pwd is None:
+    #     print("Valid MongoDB user password not found", file=sys.stderr)
+    #     sys.exit(1)
+    # uri_str = f"mongodb+srv://{usr}:{pwd}@wrnz.kej834t.mongodb.net/?retryWrites=true&w=majority"
 
     uri_str = "mongodb://localhost:27017"
-    # uri_str = f"mongodb+srv://{usr}:{pwd}@wrnz.kej834t.mongodb.net/?retryWrites=true&w=majority"
 
     myclient = pymongo.MongoClient(uri_str)
     db = myclient["cml"]
@@ -218,7 +261,7 @@ def main():
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
     print(cmls.head())
 
-    # process each link
+    # process each link in the domain
     for index, row in cmls.iterrows():
         cml_rain(row, cml_col, data_col, args.start, args.end)
 

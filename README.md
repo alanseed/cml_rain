@@ -9,6 +9,9 @@ This is a proof of concept project that uses Python, MongoDB, and SNMP to config
 
 Each link is saved as the "links" colletion in the "cml" data base. The collection is a set geoJSON documents, each with a unique link_id string.  The mid-point of the link is used as the location index for spatial searches from MongoDB.  
 
+TO DO
+link_id is an integer, need to make a change to the load_nl_data.py to make this a string  
+
 ```python
 
 {
