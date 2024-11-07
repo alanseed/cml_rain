@@ -150,7 +150,7 @@ def is_raining(
             min_raining_neighbours = 0.5 * number_neighbours
 
             # use a simple threshold if the target link has rain and here are no neighbours
-            if (number_with_rain == 1) & (number_neighbours <= 2):
+            if (number_with_rain == 1) and (number_neighbours <= 2):
                 has_rain = True
 
             # else check if we have enough neighbouring links with rain
@@ -218,7 +218,7 @@ def cml_rain(
             # append rain_doc to the record
             data_col.update_one(
                 {"link_id": link_id, "end_time": time},
-                {"$push": {"rain": rain_doc}},
+                {"$push": rain_doc},
                 upsert=True,
             )
 
@@ -253,14 +253,14 @@ def main():
     myclient = pymongo.MongoClient(uri_str)
     db = myclient["cml"]
     cml_col = db["links"]
-    data_col = db["data"]
+    data_col = db["test_data"]
 
     # get the list of cmls in the links dictionary in the area that we are working with
     longitude = 4.0
     latitude = 52.0
     max_range = 250000
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
-    links = cmls.to_dict(index=False)
+    links = cmls.to_dict(orient="records")
 
     # process the links
     num_workers = 32  # Number of cores
