@@ -7,6 +7,7 @@ import numpy as np
 import pymongo
 import pymongo.collection
 import pandas as pd
+import concurrent.futures
 
 
 def valid_date(s: str) -> np.datetime64:
@@ -259,12 +260,21 @@ def main():
     latitude = 52.0
     max_range = 250000
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
-    print(cmls.head())
+    links = cmls.to_dict(index=False)
 
-    # process each link in the domain
-    for index, row in cmls.iterrows():
-        cml_rain(row, cml_col, data_col, args.start, args.end)
+    # process the links
+    num_workers = 32  # Number of cores
+    start_time = args.start
+    end_time = args.end
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [
+            executor.submit(cml_rain, link, cml_col, data_col, start_time, end_time)
+            for link in links
+        ]
 
+    # Ensure all threads complete by checking the results
+    for future in futures:
+        future.result()
 
 if __name__ == "__main__":
     main()
