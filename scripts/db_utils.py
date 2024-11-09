@@ -4,6 +4,7 @@ import pandas as pd
 import pymongo
 import pymongo.collection
 import numpy as np
+import math
 
 def get_cmls(
     cml_col: pymongo.collection.Collection,
@@ -56,6 +57,10 @@ def is_valid_power(power: float) -> bool:
     Returns:
         bool: True if within the range 
     """
+
+    if math.isnan(power) or (power is None):
+        return False 
+    
     # Valid range for pmax or pmin based on the PDF of the Netherlands link data
     max_valid_power = -20
     min_valid_power = -70
