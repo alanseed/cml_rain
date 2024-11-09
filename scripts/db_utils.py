@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pymongo
 import pymongo.collection
+import numpy as np
 
 def get_cmls(
     cml_col: pymongo.collection.Collection,
@@ -69,28 +70,32 @@ def calc_max_pmin(
     """
     Calculate the maximum valid Pmin in the last 24 hours
     Args:
-        link_id (int): _description_
-        data_col (pymongo.collection.Collection): _description_
-        time (datetime): _description_
+        link_id (int): Link ID
+        data_col (pymongo.collection.Collection): MongoDB collection
+        time (datetime): Time to reference for the last 24 hours
     """
     ref_power = float("NaN")
     min_number_records = 25
     start_time = time - timedelta(days=1)
-    query = {"link_id": link_id, "end_time": {"$gte":start_time, "$lte":time}}
-    projection = {"pmin.value":1, "_id":0}
-    number_records = data_col.count_documents(
-        filter=query
-    )
+    query = {"link_id": link_id, "end_time": {"$gte": start_time, "$lte": time}}
+    projection = {"pmin.value": 1, "_id": 0}
+    
+    number_records = data_col.count_documents(filter=query)
+    
     if number_records > min_number_records:
         pmin = []
-        for doc in data_col.find(filter=query, projection = projection):
-            value = float(doc["pmin"]["value"])
-            if is_valid_power(value):
-                pmin.append(value)
+        for doc in data_col.find(filter=query, projection=projection):
+            value = doc.get("pmin", {}).get("value")
+            if value is not None:
+                try:
+                    value = float(value)
+                    if is_valid_power(value):
+                        pmin.append(value)
+                except (ValueError, TypeError):
+                    continue
         
         # calculate the max if we have enough valid values
-        if pmin:   
-            data = np.array(pmin, dtype=float)
-            if len(data) > min_number_records:
-                ref_power = data.max()
+        if len(pmin) > min_number_records:
+            ref_power = max(pmin)
+    
     return ref_power
