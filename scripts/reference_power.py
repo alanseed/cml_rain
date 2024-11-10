@@ -18,7 +18,7 @@ import pymongo
 import pymongo.collection
 import pandas as pd
 
-from db_utils import get_cmls, is_valid_power, calc_max_pmin
+from db_utils import get_cmls, calc_max_pmin
 
 
 def valid_date(s: str) -> np.datetime64:
@@ -46,30 +46,41 @@ def calculate_ref_power(
     start_time: np.datetime64,
     end_time: np.datetime64,
 ):
+    # unfortunately link_id is int32 in the database
+    link_id = int(cml["link_id"])
 
-    link_id = cml["link_id"]
     start_time_dt = pd.to_datetime(start_time).to_pydatetime()
     end_time_dt = pd.to_datetime(end_time).to_pydatetime()
     time_range = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
 
-    # loop over the time steps
+    updates = []  # List to store updates for bulk write
+    max_updates = 1000 
+
+    # Loop over the time steps
     for time in time_range:
 
-        # check that there is a record at this link for this time
+        # Check that there is a record at this link for this time
         has_record = data_col.count_documents(
-            filter={"link_id": link_id, "end_time": time}
+            filter={"link_id": link_id, "time.end_time": time}
         )
         if has_record == 1:
-            # check if there is rain along this link
-            max_pmin = calc_max_pmin(link_id, data_col, time)
-            max_pmin_doc = {"max_pmin": max_pmin}
+            # Calculate the reference power
+            p_ref = calc_max_pmin(link_id, data_col, time)
+            p_ref_doc = {"atten.p_ref": p_ref}
 
-            # append rain_doc to the record
-            data_col.update_one(
-                {"link_id": link_id, "end_time": time},
-                {"$push": max_pmin_doc},
-                upsert=True,
-            )
+            # Prepare bulk update
+            updates.append(pymongo.UpdateOne(
+                {"link_id": link_id, "time.end_time": time},
+                {"$set": p_ref_doc},
+                upsert=True
+            ))
+            if len(updates) > max_updates:
+                data_col.bulk_write(updates)
+                updates = []
+
+    # Perform any remaining bulk write operations
+    if updates:
+        data_col.bulk_write(updates)
 
 
 def main():
@@ -103,8 +114,8 @@ def main():
 
     myclient = pymongo.MongoClient(uri_str)
     db = myclient["cml"]
-    cml_col = db["links"]
-    data_col = db["test_data"]
+    cml_col = db["cml_metadata"]
+    data_col = db["cml_test_data"]
 
     # get the list of cmls in the links dictionary in the area that we are working with
     longitude = 4.0
