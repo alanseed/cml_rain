@@ -35,7 +35,7 @@ def get_cmls(
     records = []
     for doc in cml_col.find(filter=query):
         record = {
-            "link_id": int(doc["properties"]["link_id"]),
+            "link_id": str(doc["properties"]["link_id"]),
             "frequency": float(doc["properties"]["frequency"]["value"]),
             "length": float(doc["properties"]["length"]["value"]),
             "mid_lon": float(doc["properties"]["midpoint"]["coordinates"][0]),
@@ -75,22 +75,24 @@ def calc_max_pmin(
     """
     Calculate the maximum valid Pmin in the last 24 hours
     Args:
-        link_id (int): Link ID
+        link_id (str): Link ID
         data_col (pymongo.collection.Collection): MongoDB collection
         time (datetime): Time to reference for the last 24 hours
     """
     ref_power = float("NaN")
     min_number_records = 25
     start_time = time - timedelta(days=1)
-    query = {"link_id": link_id, "end_time": {"$gte": start_time, "$lte": time}}
-    projection = {"pmin.value": 1, "_id": 0}
+    
+    # only look for dry periods
+    query = {"link_id": link_id, "time.end_time": {"$gte": start_time, "$lte": time}, "atten.has_rain":False}
+    projection = {"power": 1, "_id": 0}
     
     number_records = data_col.count_documents(filter=query)
     
     if number_records > min_number_records:
         pmin = []
         for doc in data_col.find(filter=query, projection=projection):
-            value = doc.get("pmin", {}).get("value")
+            value = doc.get("power",{}).get("p_min")
             if value is not None:
                 try:
                     value = float(value)
