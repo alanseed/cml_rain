@@ -125,12 +125,18 @@ data_df["DateTime"] = pd.to_datetime(data_df["DateTime"], format="%Y%m%d%H%M")
 write_data_records(data_df, data_col)
 
 # Set up the indexes
-data_index_id = pymongo.IndexModel(
+data_index_1 = pymongo.IndexModel(
     [("link_id", pymongo.ASCENDING)], name="link_id")
-data_index_id_time = pymongo.IndexModel(
+data_index_2 = pymongo.IndexModel(
     [("link_id", pymongo.ASCENDING), ("time.end_time", pymongo.ASCENDING)], name="link_id_time"
 )
-data_col.create_indexes([data_index_id, data_index_id_time])
+data_index_3 = pymongo.IndexModel(
+    [("link_id", pymongo.ASCENDING), 
+    ("time.end_time", pymongo.ASCENDING),
+    ("atten.s_atten", pymongo.ASCENDING)]
+)
+
+data_col.create_indexes([data_index_1, data_index_2, data_index_3])
 
 link_index_id = pymongo.IndexModel(
     [("properties.link_id", pymongo.ASCENDING)], name="link_id", unique=True
