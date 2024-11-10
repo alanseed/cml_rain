@@ -147,7 +147,7 @@ def main():
     myclient = pymongo.MongoClient(uri_str)
     db = myclient["cml"]
     cml_col = db["cml_metadata"]
-    data_col = db["cml_test_data"]
+    data_col = db["cml_data"]
 
     # get a list of the cmls in the area that we are working with
     longitude = 4.0
