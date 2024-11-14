@@ -19,8 +19,10 @@ import pymongo.collection
 import pandas as pd
 import time 
 
-from db_utils import get_cmls, calc_max_pmin
+from db_utils import get_cmls, calc_p_ref
 
+import logging
+logging.basicConfig(level=logging.INFO)
 
 def valid_date(s: str) -> np.datetime64:
     """
@@ -41,54 +43,12 @@ def valid_date(s: str) -> np.datetime64:
         raise argparse.ArgumentTypeError(f"Not a valid date: {s!r}") from e
 
 
-def calculate_ref_power(
-    cml: dict,
-    data_col: pymongo.collection.Collection,
-    start_time: np.datetime64,
-    end_time: np.datetime64,
-):
-    # unfortunately link_id is int32 in the database
-    link_id = int(cml["link_id"])
-
-    start_time_dt = pd.to_datetime(start_time).to_pydatetime()
-    end_time_dt = pd.to_datetime(end_time).to_pydatetime()
-    time_range = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
-
-    updates = []  # List to store updates for bulk write
-    max_updates = 1000 
-
-    # Loop over the time steps
-    for time in time_range:
-
-        # Check that there is a record at this link for this time
-        has_record = data_col.count_documents(
-            filter={"link_id": link_id, "time.end_time": time}
-        )
-        if has_record == 1:
-            # Calculate the reference power
-            p_ref = calc_max_pmin(link_id, data_col, time)
-            p_ref_doc = {"atten.p_ref": p_ref}
-
-            # Prepare bulk update
-            updates.append(pymongo.UpdateOne(
-                {"link_id": link_id, "time.end_time": time},
-                {"$set": p_ref_doc},
-                upsert=True
-            ))
-            if len(updates) > max_updates:
-                data_col.bulk_write(updates)
-                updates = []
-
-    # Perform any remaining bulk write operations
-    if updates:
-        data_col.bulk_write(updates)
-
-def calculate_ref_power_time(ref_time:datetime, links:int, data_col:pymongo.collection.Collection):
-    """Calculate the max p_min for last 24 h for a set of links at ref_time
+def calculate_ref_power(ref_time:datetime, links:int, data_col:pymongo.collection.Collection):
+    """Calculate reference power for a set of links at ref_time
 
     Args:
         ref_time (datetime): Time
-        links (dict): Dictionary of links to be processed
+        links ([int]): List of links to be processed
         data_col (pymongo.collection.Collection): data collection 
     """    
 
@@ -97,6 +57,7 @@ def calculate_ref_power_time(ref_time:datetime, links:int, data_col:pymongo.coll
     projection = {"link_id":1, "_id":0}
     number_links = data_col.count_documents(filter=query)
 
+    # no links found so return 
     if number_links == 0:
         return 
     
@@ -106,7 +67,7 @@ def calculate_ref_power_time(ref_time:datetime, links:int, data_col:pymongo.coll
         link_id = doc["link_id"] 
 
         # Calculate the reference power
-        p_ref = calc_max_pmin(link_id, data_col, ref_time)
+        p_ref = calc_p_ref(link_id, data_col, ref_time)
         p_ref_doc = {"atten.p_ref": p_ref}
 
         # Prepare bulk update
@@ -123,7 +84,7 @@ def calculate_ref_power_time(ref_time:datetime, links:int, data_col:pymongo.coll
     if updates:
         data_col.bulk_write(updates)
 
-    print(f"Updated {number_links} at {ref_time}")
+    logging.info(f"Updated {number_links} links at {ref_time}")
 
 def main():
     """Calculate the maximum valid Pmin over a 24 h period"""
@@ -138,7 +99,8 @@ def main():
     # print out some info
     start_time = args.start
     end_time = args.end
-    print(f"Start date = {start_time}\nEnd date = {end_time}")
+    logging.info(f"Start date = {start_time}") 
+    logging.info(f"End date = {end_time}")
 
     # set up a local database
     uri_str = "mongodb://localhost:27017"
@@ -170,13 +132,8 @@ def main():
     start_time_dt = pd.to_datetime(start_time).to_pydatetime()
     end_time_dt = pd.to_datetime(end_time).to_pydatetime()
     times = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
-
-    start_proc = time.time()
     for ref_time in times:
-        calculate_ref_power_time(ref_time, links, data_col)
-
-    end_proc = time.time()
-    print(f"Elapsed time = {end_proc-start_proc} seconds")
+        calculate_ref_power(ref_time, links, data_col)
 
 if __name__ == "__main__":
     main()

@@ -45,7 +45,7 @@ def get_cmls(
 
     # Convert the list of records to a DataFrame
     cml_df = pd.DataFrame(records)
-    cml_df = cml_df.loc[(cml_df["length"] > 1.0) & (cml_df["length"] < 10.0) ]
+    cml_df = cml_df.loc[(cml_df["length"] > 500) & (cml_df["length"] < 10000) ]
     cml_df = cml_df.loc[(cml_df["frequency"] > 10.0) & (cml_df["frequency"] < 40.0)]
 
     return cml_df
