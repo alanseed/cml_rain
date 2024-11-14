@@ -17,6 +17,7 @@ import numpy as np
 import pymongo
 import pymongo.collection
 import pandas as pd
+import time 
 
 from db_utils import get_cmls, calc_max_pmin
 
@@ -82,6 +83,47 @@ def calculate_ref_power(
     if updates:
         data_col.bulk_write(updates)
 
+def calculate_ref_power_time(ref_time:datetime, links:int, data_col:pymongo.collection.Collection):
+    """Calculate the max p_min for last 24 h for a set of links at ref_time
+
+    Args:
+        ref_time (datetime): Time
+        links (dict): Dictionary of links to be processed
+        data_col (pymongo.collection.Collection): data collection 
+    """    
+
+    # get the links with data at this time step 
+    query = {"link_id":{"$in":links}, "time.end_time":ref_time}
+    projection = {"link_id":1, "_id":0}
+    number_links = data_col.count_documents(filter=query)
+
+    if number_links == 0:
+        return 
+    
+    max_updates = 1000 
+    updates = [] 
+    for doc in data_col.find(filter=query, projection=projection): 
+        link_id = doc["link_id"] 
+
+        # Calculate the reference power
+        p_ref = calc_max_pmin(link_id, data_col, ref_time)
+        p_ref_doc = {"atten.p_ref": p_ref}
+
+        # Prepare bulk update
+        updates.append(pymongo.UpdateOne(
+            {"link_id": link_id, "time.end_time": ref_time},
+            {"$set": p_ref_doc},
+            upsert=True
+        ))
+        if len(updates) > max_updates:
+            data_col.bulk_write(updates)
+            updates = []
+
+    # Perform any remaining bulk write operations
+    if updates:
+        data_col.bulk_write(updates)
+
+    print(f"Updated {number_links} at {ref_time}")
 
 def main():
     """Calculate the maximum valid Pmin over a 24 h period"""
@@ -122,24 +164,19 @@ def main():
     latitude = 52.0
     max_range = 250000
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
-    links = cmls.to_dict(orient="records")
+    links = cmls["link_id"].values.tolist() 
 
-    # process the links in parallel
-    num_workers = 32  # Number of cores
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = [
-            executor.submit(calculate_ref_power, link, data_col, start_time, end_time)
-            for link in links
-        ]
+    # make the list of 15 min times to be processed 
+    start_time_dt = pd.to_datetime(start_time).to_pydatetime()
+    end_time_dt = pd.to_datetime(end_time).to_pydatetime()
+    times = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
 
-    # Ensure all threads complete by checking the results
-    for future in futures:
-        future.result()
+    start_proc = time.time()
+    for ref_time in times:
+        calculate_ref_power_time(ref_time, links, data_col)
 
-    # for link in links:
-    #     print(f"Processing link {link["link_id"]}")
-    #     calculate_ref_power(link, data_col, start_time, end_time)
-
+    end_proc = time.time()
+    print(f"Elapsed time = {end_proc-start_proc} seconds")
 
 if __name__ == "__main__":
     main()

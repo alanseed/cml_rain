@@ -88,7 +88,7 @@ The time series data for minimum and maximum power, are stored in the "cml_data"
 
 # Reference power  
 
-Following Overeem et al (2016) the attenuation is calculated as the difference between a reference power and the measured p_min over the interval. The reference power is calculated using `scripts/reference_power.py` for given start and end ISODates (yyyy-mm-dd). The script is configured to search the cml_metadata collection for the links that are within 250 km of a central location: 
+Following Overeem et al (2016) the attenuation is calculated as the difference between a reference power and the measured p_min over the interval. The reference power is calculated using `scripts/reference_power.py` for given start and end ISODates (yyyy-mm-dd). The script is configured to search the cml_metadata collection for the links that are within 250 km of a central location:  
 
 ```python
     # get the list of cmls in the links dictionary in the area that we are working with
@@ -98,7 +98,9 @@ Following Overeem et al (2016) the attenuation is calculated as the difference b
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
 
 ```  
-This algorithm makes a query for data at a link for the past 24 hours for each 15-minute time step, and therefore represents an intensive use of the database. It takes around 30 minutes to process all 3000 links over the period 2011-06-09 to 2011-07-01.  
+
+This algorithm generates a list of links that are in the search area. For each 15-min time step the algorith searches the database for any link in the list that has data for that time step and calculates the maximum p_min over the preceeding 24 h.  
+It takes just under 2 minutes to process all ~3000 links for each 15-minute timestep in a day.
 
 ## Usage  
 
@@ -135,14 +137,3 @@ where yyyy-mm-dd represents the desired start and end dates
 ## Output  
 
 The script updates the "atten.has_rain" field to True if rain has been detected  
-
-
-
-
-
-
-
-  
-
-
-
