@@ -45,6 +45,9 @@ def get_cmls(
 
     # Convert the list of records to a DataFrame
     cml_df = pd.DataFrame(records)
+    cml_df = cml_df.loc[(cml_df["length"] > 1.0) & (cml_df["length"] < 10.0) ]
+    cml_df = cml_df.loc[(cml_df["frequency"] > 10.0) & (cml_df["frequency"] < 40.0)]
+
     return cml_df
 
 def is_valid_power(power: float) -> bool:
@@ -69,40 +72,48 @@ def is_valid_power(power: float) -> bool:
     else:
         return False
     
-def calc_max_pmin(
-    link_id: int, data_col: pymongo.collection.Collection, time: datetime
-) -> float:
+
+def calc_p_ref(link_id: int, data_col: pymongo.collection.Collection, time: datetime) -> float:
     """
-    Calculate the maximum valid Pmin in the last 24 hours
+    Calculate the P_ref in the last 24 hours.
+    P_ref is defined as the median (P_min+P_max)/2 over the previous 24 h.
+    Returns NaN if a valid P_ref has not been calculated 
+
     Args:
-        link_id (str): Link ID
-        data_col (pymongo.collection.Collection): MongoDB collection
-        time (datetime): Time to reference for the last 24 hours
+        link_id (int): Link ID. as an integer
+        data_col (pymongo.collection.Collection): MongoDB collection.
+        time (datetime): Time to reference for the last 24 hours.    
     """
     ref_power = float("NaN")
     min_number_records = 25
     start_time = time - timedelta(days=1)
-    
-    # only look for dry periods
-    query = {"link_id": link_id, "time.end_time": {"$gte": start_time, "$lte": time}, "atten.has_rain":False}
+
+    # Query MongoDB for dry periods without rain
+    query = {
+        "link_id": link_id,
+        "time.end_time": {"$gte": start_time, "$lte": time},
+        "atten.has_rain": False
+    }
     projection = {"power": 1, "_id": 0}
-    
-    number_records = data_col.count_documents(filter=query)
-    
-    if number_records > min_number_records:
-        pmin = []
-        for doc in data_col.find(filter=query, projection=projection):
-            value = doc.get("power",{}).get("p_min")
-            if value is not None:
+
+    # Aggregate directly if records exist
+    records = list(data_col.find(filter=query, projection=projection))
+    if len(records) > min_number_records:
+        pave = []
+        for doc in records:
+            pmin = doc.get("power", {}).get("p_min")
+            pmax = doc.get("power", {}).get("p_max")
+            if pmin is not None and pmax is not None:
                 try:
-                    value = float(value)
+                    value = (float(pmin) + float(pmax)) / 2.0
                     if is_valid_power(value):
-                        pmin.append(value)
+                        pave.append(value)
                 except (ValueError, TypeError):
                     continue
-        
-        # calculate the max if we have enough valid values
-        if len(pmin) > min_number_records:
-            ref_power = max(pmin)
-    
+
+        # Calculate the median if we have enough valid data
+        if len(pave) >= min_number_records:
+            ref_power = np.median(pave)
+
     return ref_power
+
