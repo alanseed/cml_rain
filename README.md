@@ -150,3 +150,14 @@ The script updates the "atten.has_rain" field to True if rain has been detected
 # Attenuation to rain  
 
 `scripts/rain.py` implements the ITUR-R P.838-3 recommendation for a specific attenuation model to estimate the link mean rain rate based on the frequency of the link and the specific attenuation estimate.
+
+## Usage  
+
+scripts/rain.py --start yyyy-mm-dd --end yyyy-mm-dd  
+where yyyy-mm-dd represents the desired start and end dates  
+
+## Output  
+
+The script inserts or updates the "rain" sub-document.  
+
+The default is for the rain sub-document to be missing after the initial record is inserted, and this is added once the rain is estimated. 
