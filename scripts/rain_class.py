@@ -1,23 +1,24 @@
 """
-    Classify rain / no-rain 
-    Based on the RAINLINK algorithm 
-    Assumes that the attenuation has been calculated 
+    Classify rain / no-rain
+    Based on the RAINLINK algorithm
+    Assumes that the attenuation has been calculated
 
 """
+import logging
+from datetime import datetime
+import argparse
+import os
+import numpy as np
+import pymongo
+import pymongo.collection
+import pandas as pd
+from db_utils import get_cmls
 import sys
 
 sys.path.append("../scripts")
-from db_utils import get_cmls, is_valid_power
 
-import concurrent.futures
-import pandas as pd
-import pymongo.collection
-import pymongo
-import numpy as np
-import os
-import argparse
-from datetime import datetime
-import math
+
+logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
 
 
 def valid_date(s: str) -> np.datetime64:
@@ -43,15 +44,11 @@ def is_raining(
     link_id: int,
     neighbours: list,
     time: datetime,
-    data_col: pymongo.collection.Collection,
-    min_attenuation: float = 0.7  
+    data_col: pymongo.collection.Collection
 ) -> bool:
     """
     Use a RAINLINK adjacent algorithm to classify a link as having rain.
-
-    A link is deemed to have rain if more than half of its neighbours 
-    have attenuation that is above a specified threshold.
-    Attenuation is defined as p_ref - p_min. 
+    Assumes that attenuation is defined as p_ref - p_min
 
     Args:
         link_id (int): ID of the target link
@@ -63,7 +60,9 @@ def is_raining(
     Returns:
         bool: True if raining, otherwise False.
     """
-    
+
+    min_s_atten = 0.7
+    min_atten = 1.4
     # MongoDB query to get neighbours and their attenuation
     query = {
         "link_id": {"$in": neighbours},
@@ -71,98 +70,95 @@ def is_raining(
         "atten.s_atten": {"$ne": float('NaN'), "$type": "double"}
     }
 
-    # Fetch all records matching the query and convert to a DataFrame
-    records = list(
-        data_col.find(filter=query, projection={"link_id": 1, "atten.s_atten": 1, "_id": 0})
-    )
+    records = []
+    for doc in data_col.find(filter=query, projection={"link_id": 1, "atten": 1, "_id": 0}):
+        record = {
+            "link_id": int(doc["link_id"]),
+            "atten": float(doc["atten"]["atten"]),
+            "s_atten": float(doc["atten"]["s_atten"])
+        }
+        records.append(record)
 
     if not records:
         return False
 
-    # Create DataFrame directly from query results
     atten_df = pd.DataFrame(records)
+    atten_df = atten_df.dropna()
+    median_atten = atten_df["atten"].median()
+    median_s_atten = atten_df["s_atten"].median()
 
-    # Check if the target link has a valid observation
-    if link_id not in atten_df["link_id"].values:
+    if median_atten >= min_atten and median_s_atten >= min_s_atten:
+        return True
+    else:
         return False
 
-    # Extract 's_atten' values from the 'atten' column
-    atten_df["s_atten"] = atten_df["atten"].apply(lambda x: x.get("s_atten", float('nan'))) 
-
-    # Calculate how many links (including the target) have attenuation above the threshold
-    number_with_rain = atten_df[atten_df["s_atten"] > min_attenuation].shape[0]
-    number_links = len(records)
-    min_raining_links = 0.5 * number_links
-
-    # Classification logic
-    if (number_with_rain == 1 and number_links <= 2) or number_with_rain >= min_raining_links:
-        return True
-    
-    return False
 
 def classify_rain(
-    cml: dict,
+    ref_time: datetime,
+    cmls: pd.DataFrame,
     cml_col: pymongo.collection.Collection,
-    data_col: pymongo.collection.Collection,
-    start_time: np.datetime64,
-    end_time: np.datetime64,
+    data_col: pymongo.collection.Collection
+
 ):
     """
     Use a RAINLINK adjacent algorithm to classify a link with rain based on a neighbourhood search
-
-    The neighbourhood is set at 15 km
+    The neighbourhood search is set at 10 km
+    Updates the has_rain flag in the atten document for each observation
 
     Args:
-        cml (dict): link to be processed
+        cmls (pd.DataFrame): metadata for links to be processed
         cml_col: (pymongo.collection.Collection): CML metadata
         data_col: (pymongo.collection.Collection): Time series CML data
-        start_time (np.datetime64): start time for processing
-        end_time (np.datetime64): end time for processing
+        ref_time (datetime): Time for processing
     """
 
-    link_id = int(cml["link_id"])
+    links = cmls["link_id"].values.astype(int).tolist()
+    query = {"link_id": {"$in": links}, "time.end_time": ref_time}
+    projection = {"link_id": 1, "_id": 0}
+    number_links = data_col.count_documents(filter=query)
 
-    # Get the list of nearest neighbour cmls, including the target cml
-    neighbours = []
-    max_range = 15000
-    mid_lon = cml["mid_lon"]
-    min_lat = cml["mid_lat"]
-    query = {
-        "properties.midpoint": {
-            "$nearSphere": {
-                "$geometry": {"type": "Point", "coordinates": [mid_lon, min_lat]},
-                "$maxDistance": max_range,
+    # no links found so return
+    if number_links == 0:
+        return
+
+    max_updates = 1000
+    updates = []
+    number_rain = 0
+    for doc in data_col.find(filter=query, projection=projection):
+        link_id = doc.get("link_id")
+        if link_id is not None:
+            link_id = int(link_id)
+
+            # Get the list of nearest neighbour cmls, including the target cml
+            neighbours = []
+            max_range = 10000
+            mid_lon = float(cmls.loc[cmls["link_id"] == link_id, "mid_lon"].iloc[0])
+            mid_lat = float(cmls.loc[cmls["link_id"] == link_id, "mid_lat"].iloc[0])
+            n_query = {
+                "properties.midpoint": {
+                    "$nearSphere": {
+                        "$geometry": {"type": "Point", "coordinates": [mid_lon, mid_lat]},
+                        "$maxDistance": max_range,
+                    }
+                }
             }
-        }
-    }
-    for doc in cml_col.find(filter=query, projection={"properties.link_id": 1}):
-        neighbours.append(doc["properties"]["link_id"])
+            n_projection = {"properties.link_id": 1, "_id": 0}
 
-    # Set up the times to be processed
-    start_time_dt = pd.to_datetime(start_time).to_pydatetime()
-    end_time_dt = pd.to_datetime(end_time).to_pydatetime()
-    time_range = pd.date_range(
-        start=start_time_dt, end=end_time_dt, freq="15min")
+            for n_doc in cml_col.find(filter=n_query, projection=n_projection):
+                if n_doc:
+                    neighbours.append(int(n_doc["properties"]["link_id"]))
 
-    updates = []  # List to store updates for bulk write
-    max_updates = 1000 
+            has_rain = is_raining(link_id, neighbours, ref_time, data_col)
 
-    # loop over the time steps
-    for time in time_range:
-
-        # check that there is a record at this link for this time
-        has_record = data_col.count_documents(
-            filter={"link_id": link_id, "time.end_time": time}
-        )
-        if has_record == 1:
-            has_rain = is_raining(link_id, neighbours, time, data_col)
+            # assume that the default value for has_rain in the timeseries data is False
             if has_rain:
-                rain_doc = {"atten.has_rain": has_rain}
+                number_rain += 1
+                atten_doc = {"atten.has_rain": has_rain}
 
                 # Prepare bulk update
                 updates.append(pymongo.UpdateOne(
-                    {"link_id": link_id, "time.end_time": time},
-                    {"$set": rain_doc},
+                    {"link_id": link_id, "time.end_time": ref_time},
+                    {"$set": atten_doc},
                     upsert=True
                 ))
                 if len(updates) > max_updates:
@@ -172,8 +168,9 @@ def classify_rain(
     # Perform bulk write operation if there are updates
     if updates:
         data_col.bulk_write(updates)
-    return
 
+    logging.info(f"Classified rain at {number_rain} links at {ref_time}")
+    return
 
 
 def main():
@@ -210,32 +207,22 @@ def main():
     cml_col = db["cml_metadata"]
     data_col = db["cml_data"]
 
-    # get the list of cmls in the links dictionary in the area that we are working with
+    # get a list of the cmls in the area that we are working with
     longitude = 4.0
     latitude = 52.0
     max_range = 250000
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
-    links = cmls.to_dict(orient="records")
 
-    # process the links
     start_time = args.start
     end_time = args.end
+    logging.info(f"Start date = {start_time}")
+    logging.info(f"End date = {end_time}")
 
-    num_workers = 32  # Number of cores
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = [
-            executor.submit(classify_rain, link, cml_col,
-                            data_col, start_time, end_time)
-            for link in links
-        ]
-
-    # Ensure all threads complete by checking the results
-    for future in futures:
-        future.result()
-
-    # for link in links:
-    #     print(f"Processing link {link["link_id"]}")
-    #     classify_rain(link, cml_col, data_col, start_time, end_time)
+    start_time_dt = pd.to_datetime(start_time).to_pydatetime()
+    end_time_dt = pd.to_datetime(end_time).to_pydatetime()
+    times = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
+    for ref_time in times:
+        classify_rain(ref_time, cmls, cml_col, data_col)
 
 
 if __name__ == "__main__":

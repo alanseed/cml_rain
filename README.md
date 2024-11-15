@@ -100,6 +100,7 @@ Following Overeem et al (2016) the attenuation is calculated as the difference b
 ```  
 
 This algorithm generates a list of links that are in the search area. For each 15-min time step the algorith searches the database for any link in the list that has data for that time step and calculates the maximum p_min over the preceeding 24 h.  
+
 It takes just under 2 minutes to process all ~3000 links for each 15-minute timestep in a day.
 
 ## Usage  
@@ -113,7 +114,9 @@ The script updates the "atten.p_ref" fields
 
 # Attenuation  
 
-`scripts/attenuation.py` assumes that the reference power has been calculated and uses this to calculate the attenuation, based on p_min. The complexity here is the link length needs to be known for the calculation of specific attenuation and this comes from the metadata collection, so it is an example of combining information from both the cml_metadata and cml_data collections.  
+`scripts/attenuation.py` assumes that the reference power has been calculated and uses this to calculate the attenuation, based on p_min.  
+
+The complexity here is the link length needs to be known for the calculation of specific attenuation and this comes from the metadata collection, so it is an example of combining information from both the cml_metadata and cml_data collections.  
 
 ## Usage  
 
@@ -126,8 +129,13 @@ The script updates the "atten.atten" and "atten.s_atten" fields in the database
 
 # Rain / no rain classification  
 
-`scripts/rain_class.py` implements some of the RAINLINK algorithm to classify a link with rain.  
-This algorithm invokes a spatial search for the links within a range of the link and with valid attenuation fields and checks if more than half of them have s_attenuation greater than some threshold.  
+`scripts/rain_class.py` implements the RAINLINK algorithm to classify a link with rain.  
+
+This algorithm invokes a spatial search for the links within a range of the link and with valid attenuation fields and classifies rain if the median attenuation and specific attenuation in the neighbourhood exceeds certain limits.  
+
+The neighbours within 10 km of a link with valid data for the reference time are identfied and the attenuation and specific attenuation for each of the neighbouring links are etracted from the database.
+
+It takes 5-10 seconds to perform this classification on network of 3000 links.  
 
 ## Usage  
 
