@@ -18,7 +18,10 @@ import argparse
 from datetime import datetime
 import math
 
-def calc_attenuation(doc: dict) -> float:
+import logging
+logging.basicConfig(format = '%(asctime)s %(message)s',level=logging.INFO) 
+
+def calc_atten(doc: dict) -> float:
     """
     Calculate the attenuation.
 
@@ -58,67 +61,59 @@ def valid_date(s: str) -> np.datetime64:
     except ValueError as e:
         raise argparse.ArgumentTypeError(f"Not a valid date: {s!r}") from e
 
-def link_attenuation(
-    cml: dict,
-    data_col: pymongo.collection.Collection,
-    start_time: np.datetime64,
-    end_time: np.datetime64,
-):
+
+def calculate_attenuation(ref_time:datetime, cmls:pd.DataFrame, data_col:pymongo.collection.Collection):
     """
-    Calculate the attenuation for a link over a period of time.
+    Calculate the attenuation for a set of links at a time
+    Assumes that the reference power has been calculated 
 
     Args:
-        cml (dict): link to be processed.
-        data_col (pymongo.collection.Collection): Time series CML data.
-        start_time (np.datetime64): start time for processing.
-        end_time (np.datetime64): end time for processing.
+        ref_time (datetime): _description_
+        cml (dict): Dictionary of link metadata in the area of interest 
+        data_col (pymongo.collection.Collection): _description_
     """
-    # unfortunately the link ID is still int32
-    link_id = int(cml["link_id"])
-    length = float(cml["length"]) / 1000.0  # length in km
+    links = cmls["link_id"].values.astype(int).tolist() 
+    query = {"link_id":{"$in":links}, "time.end_time":ref_time}
+    projection = {"link_id":1, "power":1, "atten":1,"_id":0}
+    number_links = data_col.count_documents(filter=query)
 
-    # Convert times once at the start
-    start_time_dt = pd.to_datetime(start_time).to_pydatetime()
-    end_time_dt = pd.to_datetime(end_time).to_pydatetime()
+    # no links found so return 
+    if number_links == 0:
+        return 
     
-    # assumes 15 min time steps 
-    time_range = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
-
-    updates = []  # List to store updates for bulk write
     max_updates = 1000 
+    updates = [] 
+    for doc in data_col.find(filter=query, projection=projection): 
+        link_id = doc["link_id"] 
+        length = float(cmls.loc[cmls["link_id"] == link_id]["length"]) / 1000.0  # length in km
 
-    # Loop over the time steps
-    for time in time_range:
-        doc = data_col.find_one({"link_id": link_id, "time.end_time": time},
-                                projection={"power": 1, "atten": 1})
+        atten = calc_atten(doc)
+        if not math.isnan(atten) and length > 0:
+            s_atten = atten / length  # specific attenuation
+            atten_doc = {"atten.atten": atten, "atten.s_atten": s_atten}
 
-        if doc:
-            atten = calc_attenuation(doc)
-            if not math.isnan(atten):
-                s_atten = atten / length  # specific attenuation
-                atten_doc = {"atten.atten": atten, "atten.s_atten": s_atten}
-
-                # Prepare bulk update
-                updates.append(pymongo.UpdateOne(
-                    {"link_id": link_id, "time.end_time": time},
-                    {"$set": atten_doc},
-                    upsert=True
-                ))
-                if len(updates) > max_updates:
-                    data_col.bulk_write(updates)
-                    updates = []
+            # Prepare bulk update
+            updates.append(pymongo.UpdateOne(
+                {"link_id": link_id, "time.end_time": ref_time},
+                {"$set": atten_doc},
+                upsert=True
+            ))
+            if len(updates) > max_updates:
+                data_col.bulk_write(updates)
+                updates = []
 
     # Perform bulk write operation if there are updates
     if updates:
         data_col.bulk_write(updates)
 
-    return
+    logging.info(f"Updated attenuation at {number_links} links at {ref_time}")
+
 
 
 def main():
-    """Calculate attenuation and perform a rain/no-rain classification on link data"""
+    """Calculate attenuation over a set of links in an area of interest"""
     parser = argparse.ArgumentParser(
-        description="Calculate attenuation and classify rain/no_rain in CML data",
+        description="Calculate attenuation for a set of links",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-s", "--start", type=valid_date,
@@ -127,8 +122,6 @@ def main():
                         help="End date yyyy-mm-dd")
     args = parser.parse_args()
 
-    # print out some info
-    print(f"Start date = {args.start}\nend date = {args.end}")
 
     # set up the database
 
@@ -154,27 +147,18 @@ def main():
     latitude = 52.0
     max_range = 250000
     cmls = get_cmls(cml_col, longitude, latitude, max_range)
-    links = cmls.to_dict(orient="records")
 
-    # process the links
     start_time = args.start
     end_time = args.end
+    logging.info(f"Start date = {start_time}")
+    logging.info(f"End date = {end_time}")
 
-    num_workers = 32  # Number of cores
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = [
-            executor.submit(link_attenuation, link,
-                            data_col, start_time, end_time)
-            for link in links
-        ]
+    start_time_dt = pd.to_datetime(start_time).to_pydatetime()
+    end_time_dt = pd.to_datetime(end_time).to_pydatetime()
+    times = pd.date_range(start=start_time_dt, end=end_time_dt, freq="15min")
+    for ref_time in times:
+        calculate_attenuation(ref_time, cmls, data_col)
 
-    # Ensure all threads complete by checking the results
-    for future in futures:
-        future.result()
-
-    # for link in links:
-    #     print(f"Processing link {link["link_id"]}")
-    #     link_attenuation(link, data_col, start_time, end_time)
 
 if __name__ == "__main__":
     main()
