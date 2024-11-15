@@ -55,7 +55,7 @@ The collection is a set geoJSON documents, each with a unique link_id string.  T
 
 ```  
 
-## CML time series data   
+## CML time series data  
 
 The time series data for minimum and maximum power, are stored in the "cml_data" collection. Each observation is saved as a document. The link_id and end_time are used as a compound index for searches on this collection. 
 
@@ -77,7 +77,8 @@ The time series data for minimum and maximum power, are stored in the "cml_data"
       "has_rain": "Boolean",  // Rain / no rain classification
       "atten": "Float",  // Attenuation (pref-pmin) in dBm
       "s_atten": "Float"  // Specific attenuation in dBm / km
-    }
+    },
+    "rain": "Float"  // Rain rate in mm / h
   },
   "indexes": [
     { "fields": ["link_id", "time.end_time"], "type": "compound" },
@@ -145,3 +146,7 @@ where yyyy-mm-dd represents the desired start and end dates
 ## Output  
 
 The script updates the "atten.has_rain" field to True if rain has been detected  
+
+# Attenuation to rain  
+
+`scripts/rain.py` implements the ITUR-R P.838-3 recommendation for a specific attenuation model to estimate the link mean rain rate based on the frequency of the link and the specific attenuation estimate.

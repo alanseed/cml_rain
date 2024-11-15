@@ -85,8 +85,7 @@ def estimate_rain(
             f = freq * u.GHz
             k, alpha = itur.models.itu838.rain_specific_attenuation_coefficients(
                 f, 0.0, 0.0)
-            lnrain = (np.log(gamma) - np.log(k))/alpha
-            rain_rate = np.exp(lnrain)
+            rain_rate = np.pow(gamma/k,1/alpha)
             rain_rate = np.round(rain_rate,decimals=2)
 
         if not math.isnan(rain_rate):
