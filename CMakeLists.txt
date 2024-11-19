@@ -47,11 +47,13 @@ link_directories(
 set(SRC_FILES
     src/main.cpp
     src/cml_interp.cpp
+    src/image_projection.cpp
 )
 
 set(HDR_FILES
     src/cml_interp.h
     src/mongo_client_manager.h
+    src/image_projection.h
 )
 
 # Create the executable

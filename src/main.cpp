@@ -3,6 +3,7 @@
 // only one connection to the mongo db for the application
 #include <chrono>
 #include <cxxopts.hpp>
+#include <format>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <stdio.h>
@@ -32,9 +33,10 @@ int main(int argc, char* argv[])
 
     // Set up the map configuration
     json config = { { "name", "n_test" }, { "c_lat", 52.0 }, { "c_lon", 4.0 }, { "n_rows", 300 },
-        { "n_cols", 300 }, { "p_size", 1000 }, { "EPSG", 3035 } };
+        { "n_cols", 300 }, { "p_size", 1000 }, { "pjn", "EPSG:3035" } };
 
     auto status = run(start_str, end_str, config);
+    return status;
 }
 
 int run(std::string start, std::string end, json config)
@@ -44,12 +46,20 @@ int run(std::string start, std::string end, json config)
     CmlInterp cml;
 
     // Get the link_ids in the area of interest
-    std::vector<int> link_ids = cml.get_link_ids(config);
+    cml.set_config(config) ;
+    auto number_links = cml.get_link_ids( );
+    std::cout << std::format("Found {} links in map area\n", number_links);
 
     // Get the start and end times for the maps
     std::time_t start_time = cml.convertIsoToTime(start);
     std::time_t end_time = cml.convertIsoToTime(end);
     int time_step = 15 * 60; // assume 15 min steps
+    
+    // Loop over the times to be processed 
+    for (time_t m_time = start_time; m_time <= end_time; m_time += time_step){
+        cml.make_map(m_time); 
+
+    }
 
     return 0;
 }
