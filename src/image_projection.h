@@ -1,6 +1,6 @@
 // class to convert from lon,lat to img_x,img_y
 // origin in SW corner of the field
-// units in pixels 
+// units in pixels
 #include <nlohmann/json.hpp>
 #include <proj.h>
 #include <vector>
@@ -27,6 +27,7 @@ public:
     int ny() { return _ny; };
     float start_x() { return _start_x; };
     float start_y() { return _start_y; };
+    float delta() { return _delta; };
 
     std::vector<float> x_vals();
     std::vector<float> y_vals();

@@ -20,7 +20,6 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Find required packages
 find_package(Threads REQUIRED)
 find_package(ZLIB REQUIRED)
-find_package(GSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(PROJ REQUIRED)
 find_package(nlohmann_json REQUIRED)
@@ -29,11 +28,23 @@ pkg_check_modules(NETCDF REQUIRED netcdf)
 pkg_check_modules(LIBMONGOCXX REQUIRED libmongocxx)
 pkg_check_modules(LIBBSONCXX REQUIRED libbsoncxx)
 
+# Find Eigen
+find_path(EIGEN_INCLUDE_DIR
+    NAMES Eigen/Dense
+    PATHS /usr/include/eigen3
+    NO_DEFAULT_PATH
+)
+
+if(NOT EIGEN_INCLUDE_DIR)
+    message(FATAL_ERROR "Eigen3 headers not found! Install with: sudo dnf install eigen3-devel")
+endif()
+
 # Include directories
 include_directories(
     ${LIBMONGOCXX_INCLUDE_DIRS}
     ${LIBBSONCXX_INCLUDE_DIRS}
     ${NETCDF_INCLUDE_DIRS}
+    ${EIGEN_INCLUDE_DIR}
 )
 
 # Link directories (modern CMake prefers targets, but fallback added)
@@ -54,6 +65,8 @@ set(HDR_FILES
     src/cml_interp.h
     src/mongo_client_manager.h
     src/image_projection.h
+    src/kriging.h
+    src/write_nc.h
 )
 
 # Create the executable
@@ -67,8 +80,6 @@ target_link_libraries(cml_interpolate
     ${LIBMONGOCXX_LIBRARIES}
     ${LIBBSONCXX_LIBRARIES}
     ${NETCDF_LIBRARIES}
-    GSL::gsl
-    GSL::gslcblas
 )
 
 # Ensure include directories are properly set for the target
@@ -76,4 +87,5 @@ target_include_directories(cml_interpolate PRIVATE
     ${LIBMONGOCXX_INCLUDE_DIRS}
     ${LIBBSONCXX_INCLUDE_DIRS}
     ${NETCDF_INCLUDE_DIRS}
+    ${EIGEN_INCLUDE_DIR}
 )

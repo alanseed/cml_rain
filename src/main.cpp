@@ -32,7 +32,7 @@ int main(int argc, char* argv[])
     std::string end_str = result["end"].as<std::string>();
 
     // Set up the map configuration
-    json config = { { "name", "n_test" }, { "c_lat", 52.0 }, { "c_lon", 4.0 }, { "n_rows", 300 },
+    json config = { { "name", "n_test" }, { "c_lat", 52.05 }, { "c_lon", 5.25 }, { "n_rows", 300 },
         { "n_cols", 300 }, { "p_size", 1000 }, { "pjn", "EPSG:3035" } };
 
     auto status = run(start_str, end_str, config);

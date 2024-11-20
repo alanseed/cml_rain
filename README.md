@@ -160,4 +160,26 @@ where yyyy-mm-dd represents the desired start and end dates
 
 The script inserts or updates the "rain" sub-document.  
 
-The default is for the rain sub-document to be missing after the initial record is inserted, and this is added once the rain is estimated. 
+The default is for the rain sub-document to be missing after the initial record is inserted, and this is added once the rain is estimated.  
+
+# cml_interpolate  
+
+## Dependencies  
+On fedora:  
+Basic c++ tools  
+cmake  
+g++  
+gcc  
+pkg-config  
+
+sudo dnf install gsl gsl-devel  
+sudo dnf install blas blas-devel lapack lapack-devel  
+sudo dnf install udunits2  
+sudo dnf install nlohmann-json-devel  
+
+[mongo-cxx-driver](https://www.mongodb.com/docs/languages/cpp/cpp-driver/current/)  
+
+The netCDF is installed in this order:  
+sudo dnf install hdf5 hdf5-devel  
+sudo dnf install netcdf netcdf-devel  
+
