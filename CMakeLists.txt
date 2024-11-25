@@ -65,21 +65,22 @@ set(HDR_FILES
     src/cml_interp.h
     src/mongo_client_manager.h
     src/image_projection.h
-    src/kriging.h
-    src/write_nc.h
 )
 
 # Create the executable
 add_executable(cml_interpolate ${SRC_FILES} ${HDR_FILES})
 
 # Link required libraries
+# I was not able to link against the netCDF libraries using find_package and pkg_check_modules
 target_link_libraries(cml_interpolate
     Threads::Threads
     ZLIB::ZLIB
     PROJ::proj
     ${LIBMONGOCXX_LIBRARIES}
     ${LIBBSONCXX_LIBRARIES}
-    ${NETCDF_LIBRARIES}
+    /usr/lib64/libnetcdf.so  
+    /usr/lib64/libnetcdf_c++4.so 
+    # ${NETCDF_LIBRARIES}
 )
 
 # Ensure include directories are properly set for the target

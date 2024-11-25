@@ -1,0 +1,50 @@
+{
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "EPSG:3035"
+    }
+  },
+  "description": {
+    "name": "ETRS89 / LAEA Europe",
+    "scope": "Climate and environmental analysis in Europe.",
+    "type": "Projected",
+    "area": "Europe - onshore and offshore: Andorra, Austria, Belgium, Bosnia and Herzegovina, Croatia, Czechia, Denmark, Estonia, Finland, France, Germany, Gibraltar, Greece, Hungary, Iceland, Ireland, Italy, Kosovo, Latvia, Liechtenstein, Lithuania, Luxembourg, Malta, Moldova, Monaco, Montenegro, Netherlands, North Macedonia, Norway, Poland, Portugal, Romania, San Marino, Serbia, Slovakia, Slovenia, Spain, Sweden, Switzerland, United Kingdom, Vatican City.",
+    "bounding_box": {
+      "west_longitude": -9.86,
+      "east_longitude": 34.62,
+      "south_latitude": 27.6,
+      "north_latitude": 81.08
+    },
+    "coordinate_system": {
+      "type": "Cartesian",
+      "axis": [
+        {
+          "name": "Easting",
+          "abbreviation": "E",
+          "unit": "metre",
+          "direction": "east"
+        },
+        {
+          "name": "Northing",
+          "abbreviation": "N",
+          "unit": "metre",
+          "direction": "north"
+        }
+      ]
+    },
+    "datum": {
+      "name": "European Terrestrial Reference System 1989",
+      "epsg_code": "EPSG:6258"
+    },
+    "projection": {
+      "type": "Lambert Azimuthal Equal Area",
+      "central_meridian": 10.0,
+      "latitude_of_origin": 52.0,
+      "false_easting": 4321000.0,
+      "false_northing": 3210000.0
+    },
+    "unit": "metre",
+    "remarks": "Suitable for statistical mapping and analysis across Europe."
+  }
+}

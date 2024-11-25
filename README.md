@@ -164,18 +164,20 @@ The default is for the rain sub-document to be missing after the initial record 
 
 # cml_interpolate  
 
+This application reads the cml rain rate estimates and generates gridded rainfall data and follows the CF conventions for geo-referenced netCDF files.  
+
+The infrastructure to use Ordinary Kriging has been developed but the specification of the variogram still needs futher development. The test application uses an inverse distance squared interpolation scheme.  
+
 ## Dependencies  
+
 On fedora:  
 Basic c++ tools  
-cmake  
-g++  
-gcc  
-pkg-config  
+  cmake  
+  g++  
+  gcc  
+  pkg-config  
 
-sudo dnf install gsl gsl-devel  
-sudo dnf install blas blas-devel lapack lapack-devel  
-sudo dnf install udunits2  
-sudo dnf install nlohmann-json-devel  
+mongo libraries - follow instructions at  
 
 [mongo-cxx-driver](https://www.mongodb.com/docs/languages/cpp/cpp-driver/current/)  
 
@@ -183,3 +185,29 @@ The netCDF is installed in this order:
 sudo dnf install hdf5 hdf5-devel  
 sudo dnf install netcdf netcdf-devel  
 
+Proj  
+sudo dnf install proj proj-devel
+
+JSON  
+sudo dnf install nlohmann-json-devel  
+
+## Installation  
+
+From the cml_rain directory  
+`mkdir build`  
+`cd build`  
+`cmake ..`  
+`make`  
+`sudo make install`  
+
+## Usage  
+
+`cml_rain -s yyyy-mm-ddThh:mm:ss -e yyyy-mm-ddThh:mm:ss -c config.json  
+where  
+-s --start is the ISO date for the start  
+-e --end is the ISO date for the end  
+-c --config is the path to the config file  
+
+## Output  
+
+The output are netCDF files in the designated output directory  

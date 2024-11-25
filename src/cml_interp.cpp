@@ -12,11 +12,12 @@
 #include <mongocxx/stdx.hpp>
 #include <mongocxx/uri.hpp>
 
-#include "kriging.h"
 #include <cassert>
 #include <cmath> // for HUGE_VAL
 #include <iomanip> // for std::setprecision()
 #include <iostream>
+#include <ncType.h>
+#include <netcdf>
 
 /// @brief Set up the MongoDB client manager for this class
 CmlInterp::CmlInterp() { _client = &MongoClientManager::get_client(); }
@@ -26,6 +27,7 @@ void CmlInterp::set_config(json config)
 {
     _config = config;
     _pjn.set_projection(_config);
+
     _prescale = 2.0;
 }
 /// @brief Function to convert ISO time string to time_t in UTC
@@ -55,11 +57,11 @@ int CmlInterp::get_link_ids()
     mongocxx::database db = _client->database("cml");
     mongocxx::collection cml_metadata = db.collection("cml_metadata");
 
-    double c_lat = _config["c_lat"];
-    double c_lon = _config["c_lon"];
-    int n_rows = _config["n_rows"];
-    int n_cols = _config["n_cols"];
-    int p_size = _config["p_size"];
+    double c_lat = _config["domain"]["centre_lat"].get<double>();
+    double c_lon = _config["domain"]["centre_lon"].get<double>();
+    int n_rows = _config["domain"]["n_rows"].get<int>();
+    int n_cols = _config["domain"]["n_cols"].get<int>();
+    int p_size = _config["domain"]["p_size"].get<int>();
 
     double range = sqrt(pow(n_rows * p_size / 2.0, 2.0) + pow(n_cols * p_size / 2.0, 2.0));
 
@@ -107,40 +109,45 @@ int CmlInterp::get_link_ids()
     return _link_coordinates.size();
 }
 
-/// @brief Generate the rainfall map
+/// @brief Generate the rainfall map using ordinary Kriging 
 /// @param m_time valid time for the map
-void CmlInterp::make_map(time_t m_time)
+Eigen::MatrixXf CmlInterp::make_map_ok(time_t m_time)
 {
     // get the link rain for this time
     auto link_rain = get_link_rain(m_time);
     std::cout << std::format("Found {} links with data", link_rain.size()) << std::endl;
 
     Kriging krig;
+    krig.set_params(10, 15.0, 1.0); // default params range in pixel units 
 
-    int n_rows = (int)_config["n_rows"];
-    int n_cols = (int)_config["n_cols"];
+    int n_rows = (int)_config["domain"]["n_rows"].get<int>();
+    int n_cols = (int)_config["domain"]["n_cols"].get<int>();
 
     // Search for a new set of links at box_step intervals and use these within the box
     int box_step = 5; // needs to be an odd number
     int dbox = (int)(box_step / 2.0);
-    float range = 30000;
+    float range = 20; // distance in image coords 
     std::vector<Observations> local_obs;
-    int min_number_locals = 5;
+    int min_number_locals = 10;
 
     Eigen::MatrixXf map(n_rows, n_cols);
-    
-    // loop over the boxes 
+
+    // loop over the boxes
     for (float row = dbox; row < n_rows; row += box_step) {
         for (float col = dbox; col < n_cols; col += box_step) {
 
             // Get the observations for within range of the center of the box
             local_obs.clear();
-            for (int ia = 0; ia < link_rain.size(); ia++) {
-                float dy = row - link_rain[ia].y;
-                float dx = col - link_rain[ia].x;
+            for (const auto& link : link_rain) {
+                float dy = link.y - row;
+                float dx = link.x - col;
                 float dist = sqrt(dx * dx + dy * dy);
                 if (dist < range) {
-                    local_obs.push_back(link_rain[ia]);
+                    Observations obs;
+                    obs.value = link.value;
+                    obs.x = link.x;
+                    obs.y = link.y;
+                    local_obs.push_back(obs);
                 }
             }
             int number_locals = local_obs.size();
@@ -158,11 +165,12 @@ void CmlInterp::make_map(time_t m_time)
                         if (y >= 0 && y < n_rows && x >= 0 && x < n_cols) {
 
                             // calculate the weights
-                            for (int iobs = 0; iobs < local_obs.size(); iobs++) {
+                            for (std::size_t iobs = 0; iobs < local_obs.size(); iobs++) {
                                 double dx = x - local_obs[iobs].x;
                                 double dy = y - local_obs[iobs].y;
                                 double dist = sqrt(dx * dx + dy * dy);
-                                values(iobs) = krig.variogram(dist);
+                                double gamma = krig.variogram(dist);
+                                values(iobs) = gamma;
                             }
                             Eigen::VectorXd weights = krig.solveWeights(gamma, values);
 
@@ -171,8 +179,13 @@ void CmlInterp::make_map(time_t m_time)
                                 val += local_obs[ival].value * weights(ival);
                             }
 
-                            // transform back into rain rate
-                            map(y, x) = from_ihs(val);
+                            // check the limits for the rain value
+                            if (val > 200)
+                                val = NAN;
+                            if (val < 0.5)
+                                val = 0.0;
+
+                            map(y, x) = val;
                         }
                     }
                 }
@@ -192,6 +205,98 @@ void CmlInterp::make_map(time_t m_time)
             }
         }
     }
+    return map;
+}
+
+/// @brief Generate the rainfall map using Inverse Distance Weighting 
+/// @param m_time valid time for the map
+Eigen::MatrixXf CmlInterp::make_map_idw(time_t m_time)
+{
+    // get the link rain for this time
+    auto link_rain = get_link_rain(m_time);
+    std::cout << std::format("Found {} links with data", link_rain.size()) << std::endl;
+
+    int n_rows = (int)_config["domain"]["n_rows"].get<int>();
+    int n_cols = (int)_config["domain"]["n_cols"].get<int>();
+
+    // Search for a new set of links at box_step intervals and use these within the box
+    int box_step = 5; // needs to be an odd number
+    int dbox = (int)(box_step / 2.0);
+    float range = 20000 / _pjn.delta(); // distance in image coords
+    std::vector<Observations> local_obs;
+    int min_number_locals = 10;
+
+    Eigen::MatrixXf map(n_rows, n_cols);
+
+    // loop over the boxes
+    for (float row = dbox; row < n_rows; row += box_step) {
+        for (float col = dbox; col < n_cols; col += box_step) {
+
+            // Get the observations for within range of the center of the box
+            local_obs.clear();
+            for (const auto& link : link_rain) {
+                float dy = link.y - row;
+                float dx = link.x - col;
+                float dist = sqrt(dx * dx + dy * dy);
+                if (dist < range) {
+                    Observations obs;
+                    obs.value = link.value;
+                    obs.x = link.x;
+                    obs.y = link.y;
+                    local_obs.push_back(obs);
+                }
+            }
+            int number_locals = local_obs.size();
+
+            // Do the interpolation if we have enough locals
+            if (number_locals >= min_number_locals) {
+                Eigen::VectorXd weights(number_locals);
+
+                // Interpolate within the box
+                for (float ia = -dbox; ia <= dbox; ia++) {
+                    for (int ib = -dbox; ib <= dbox; ib++) {
+                        int y = (int)(row + ia);
+                        int x = (int)(col + ib);
+                        if (y >= 0 && y < n_rows && x >= 0 && x < n_cols) {
+
+                            double val = 0;
+                            double sum_weight = 0;
+                            for (std::size_t iobs = 0; iobs < number_locals; iobs++) {
+                                double dx = x - local_obs[iobs].x;
+                                double dy = y - local_obs[iobs].y;
+                                double weight = 1.0/(dx * dx + dy * dy);
+                                sum_weight += weight; 
+                                val += weight *  local_obs[iobs].value ;
+                            }
+                            val /= sum_weight ; 
+                            
+                            // check the limits for the rain value
+                            if (val > 200)
+                                val = NAN;
+                            if (val < 0.5)
+                                val = 0.0;
+
+                            map(y, x) = val;
+                        }
+                    }
+                }
+            }
+
+            // not enough locals so fill with nan
+            else {
+                for (float ia = -dbox; ia <= dbox; ia++) {
+                    for (int ib = -dbox; ib <= dbox; ib++) {
+                        int y = (int)(row + ia);
+                        int x = (int)(col + ib);
+                        if (y >= 0 && y < n_rows && x >= 0 && x < n_cols) {
+                            map(y, x) = NAN;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return map;
 }
 
 /// @brief Read the link rainfall data
@@ -230,10 +335,8 @@ std::vector<Observations> CmlInterp::get_link_rain(time_t m_time)
                 if (doc["link_id"] && doc["rain"]) {
                     int link_id = doc["link_id"].get_int32();
                     double val = doc["rain"].get_double();
-                    double tval = to_ihs(val);
-
                     link_rain.push_back(
-                        { tval, _link_coordinates[link_id].x, _link_coordinates[link_id].y });
+                        { val, _link_coordinates[link_id].x, _link_coordinates[link_id].y });
                 }
 
             } catch (const bsoncxx::exception& e) {
@@ -249,166 +352,77 @@ std::vector<Observations> CmlInterp::get_link_rain(time_t m_time)
     return link_rain;
 }
 
-#if 0
-// write the output images as a netcdf file
-// one time step per file
-void grids::write_grids(std::string file_name)
+void CmlInterp::writeNetCDF(
+    const std::string& filename, const Eigen::MatrixXf& data, time_t map_time)
 {
-    short int _fillValue = std::numeric_limits<short int>::max();
-
-    int compress = 6;
+    // Get grid coords
+    std::vector<float> x = _pjn.x_vals();
+    std::vector<float> y = _pjn.y_vals();
+    int nx = _pjn.nx();
+    int ny = _pjn.ny();
     int nt = 1;
-    int ny = projection_.ny();
-    int nx = projection_.nx();
-    auto x_vals = projection_.x_vals();
-    auto y_vals = projection_.y_vals();
 
-    unsigned long int chunk[3] = {(unsigned long)nt, (unsigned long)ny, (unsigned long)nx};
-    steps::nc::file file(file_name, steps::nc::io_mode::create);
+    // Create NetCDF file
+    netCDF::NcFile file(filename, netCDF::NcFile::replace);
 
-    // create the dimensions
-    auto &time = file.create_dimension("time", nt);
-    auto &dy = file.create_dimension("y", ny);
-    auto &dx = file.create_dimension("x", nx);
+    // Define dimensions
+    auto xDim = file.addDim("x", nx);
+    auto yDim = file.addDim("y", ny);
+    auto tDim = file.addDim("time", nt);
 
-    // now the variables
-    auto &dv =
-        file.create_variable("valid_time", steps::nc::data_type::u64, {&time});
-    dv.att_set("standard_name", "time");
-    dv.att_set("units", "seconds since 1970-01-01 00:00:00 UTC");
-    dv.att_set("long_name", "Valid UTC time");
-    dv.write(steps::span{&valid_time_, 1});
+    // Define variables
+    auto xVar = file.addVar("x", netCDF::ncFloat, xDim);
+    auto yVar = file.addVar("y", netCDF::ncFloat, yDim);
+    auto tVar = file.addVar("time", netCDF::ncInt64, tDim);
+    auto dataVar = file.addVar("rainfall", netCDF::ncFloat, { tDim, yDim, xDim });
 
-    auto &vy = file.create_variable("y", steps::nc::data_type::f32, {&dy});
-    vy.att_set("standard _name", "projection_y_coordinate");
-    vy.att_set("long_name", "projection_y_coordinate");
-    vy.att_set("units", "m");
-    vy.write(steps::span{y_vals.data(), (int)y_vals.size()});
+    // Add CF-compliant attributes to coordinate variables
+    xVar.putAtt("standard_name", "projection_x_coordinate");
+    xVar.putAtt("units", "m");
 
-    auto &vx = file.create_variable("x", steps::nc::data_type::f32, {&dx});
-    vx.att_set("standard_name", "projection_x_coordinate");
-    vx.att_set("long_name", "projection_x_coordinate");
-    vx.att_set("units", "m");
-    vx.write(steps::span{x_vals.data(), (int)x_vals.size()});
+    yVar.putAtt("standard_name", "projection_y_coordinate");
+    yVar.putAtt("units", "m");
 
-    auto &proj = file.create_variable("proj", steps::nc::data_type::u8);
-    proj.att_set("grid_mapping_name", "albers_conical_equal_area");
-    float std_par[2] = {projection_.lat_1(), projection_.lat_2()};
-    proj.att_set("standard_parallel", steps::span{std_par, 2});
-    proj.att_set("longitude_of_central_meridian", projection_.lon_0());
-    proj.att_set("latitude_of_projection_origin", projection_.lat_0());
-    proj.att_set("false_easting", projection_.false_east());
-    proj.att_set("false_northing", projection_.false_north());
-    double towgs84[7] = {0.0};
-    proj.att_set("towgs84", steps::span{towgs84, 7});
+    tVar.putAtt("standard_name", "time");
+    tVar.putAtt("units", "seconds since 1970-01-01T00:00:00Z");
+    tVar.putAtt("calendar", "gregorian");
 
-    // loop over the output images and write them out
-    for (int igrid = 0; igrid < (int)grid_data_.size(); ++igrid)
-    {
-        // set up the output variable for the grid data
-        auto &vp = file.create_variable(variable_[igrid], steps::nc::data_type::i16, {&time, &dy, &dx}, {chunk[0], chunk[1], chunk[2]}, compress);
-        vp.att_set("grid_mapping", "proj");
-        vp.att_set("long_name", long_name_[igrid]);
-        vp.att_set("standard_name", standard_name_[igrid]);
-        vp.att_set("units", units_[igrid]);
-        vp.att_set("add_offset", add_offset_[igrid]);
-        vp.att_set("scale_factor", scale_factor_[igrid]);
-        vp.att_set("_FillValue", _fillValue);
+    dataVar.putAtt("units", "mm/hr");
+    dataVar.putAtt("long_name", "Interpolated rainfall rate");
+    dataVar.putAtt("grid_mapping", "projection");
 
-        // rescale and set the fill values then write out the grid data
-        std::vector<short int> out_data(ny * nx);
-        auto *in_dataP = grid_data_[igrid].data();
-        auto *out_dataP = out_data.data();
-        for (auto ia = 0; ia < ny * nx; ++ia)
-        {
-            if (std::isnan(in_dataP[ia]))
-            {
-                out_dataP[ia] = _fillValue;
-            }
-            else
-            {
-                out_dataP[ia] = (short int)((in_dataP[ia] - add_offset_[igrid]) / scale_factor_[igrid]);
-            }
+    // Add CF-compliant projection variable
+    float lon_0 = _config["description"]["projection"]["central_meridian"].get<float>();
+    float lat_0 = _config["description"]["projection"]["latitude_of_origin"].get<float>();
+    float east = _config["description"]["projection"]["false_easting"].get<float>();
+    float north = _config["description"]["projection"]["false_northing"].get<float>();
+    float sma = 6378137.0; // Semi-major axis of the WGS84 ellipsoid
+    float flat = 298.257222101; // Inverse flattening of the WGS84 ellipsoid
+
+    auto projVar = file.addVar("projection", netCDF::ncByte);
+    projVar.putAtt("grid_mapping_name", "lambert_azimuthal_equal_area");
+    projVar.putAtt("longitude_of_projection_origin", netCDF::ncFloat, lon_0);
+    projVar.putAtt("latitude_of_projection_origin", netCDF::ncFloat, lat_0);
+    projVar.putAtt("false_easting", netCDF::ncFloat, east);
+    projVar.putAtt("false_northing", netCDF::ncFloat, north);
+    projVar.putAtt("semi_major_axis", netCDF::ncFloat, sma);
+    projVar.putAtt("inverse_flattening", netCDF::ncFloat, flat);
+
+    // Add the EPSG name for convenience
+    std::string name = _config["crs"]["properties"]["name"].get<std::string>();
+    projVar.putAtt("name", name);
+
+    // Write data to variables
+    xVar.putVar(x.data());
+    yVar.putVar(y.data());
+    tVar.putVar(&map_time);
+
+    // Flatten data for writing
+    std::vector<float> flatData(data.size());
+    for (Eigen::Index i = 0; i < data.rows(); ++i) {
+        for (Eigen::Index j = 0; j < data.cols(); ++j) {
+            flatData[i * data.cols() + j] = static_cast<float>(data(i, j));
         }
-        vp.write(steps::span{out_data.data(), (long int)(ny * nx)});
     }
-
-    // write out the global attributes
-    file.att_set("station_id", projection_.radar_id());
-    file.att_set("Conventions", "CF-1.7");
+    dataVar.putVar(flatData.data());
 }
-
-// Read in a list of variables from a nc file
-// For now assume that the grids in the nc file have the same projection etc as the standard
-// rf3 projection in the mongo database and add the grids to the vector of grids already in the class
-void grids::read_grids(std::string file_name, std::vector<std::string> var_list)
-{
-    steps::nc::file file(file_name, steps::nc::io_mode::read_only);
-
-    // read in the station id for this file and set the projection
-    int station_id;
-    file.att_get("station_id", station_id);
-    projection_.set_projection(station_id);
-
-    auto nx = projection_.nx();
-    auto ny = projection_.ny();
-
-    // read in the valid time
-    bool valid_time_exists = file.att_exists("valid_time");
-    if (valid_time_exists)
-        file.lookup_variable("valid_time").read(steps::span{&valid_time_, 1});
-    else
-        valid_time_ = 0;
-
-    // loop over the list of variables to be read in
-    for (auto ivar = 0; ivar < (int)var_list.size(); ++ivar)
-    {
-        std::string variable = var_list[ivar];
-        std::string long_name{' '};
-        std::string standard_name{' '};
-        std::string units{' '};
-        float scale_factor{1.0};
-        float add_offset{0.0};
-        double _FillValue{NAN};
-
-        auto nc_variable = file.find_variable(variable);
-        if (nc_variable->att_exists("long_name"))
-            file.find_variable(variable)->att_get("long_name", long_name);
-        if (nc_variable->att_exists("standard_name"))
-            file.find_variable(variable)->att_get("standard_name", standard_name);
-        if (nc_variable->att_exists("units"))
-            file.find_variable(variable)->att_get("units", units);
-        if (nc_variable->att_exists("scale_factor"))
-            file.find_variable(variable)->att_get("scale_factor", scale_factor);
-        if (nc_variable->att_exists("add_offset"))
-            file.find_variable(variable)->att_get("add_offset", add_offset);
-        if (nc_variable->att_exists("_FillValue"))
-            file.find_variable(variable)->att_get("_FillValue", _FillValue);
-
-        std::vector<short int> file_data(ny * nx, 0);
-        long int len = file_data.size();
-        file.lookup_variable(variable).read(steps::span{file_data.data(), len});
-
-        std::vector<float> var_data(nx * ny, 0);
-        for (auto i = 0; i < ny * nx; ++i)
-        {
-            if (isnan(double(file_data[i]) || file_data[i] == _FillValue))
-            {
-                var_data[i] = NAN;
-            }
-            else
-            {
-                var_data[i] = file_data[i] * scale_factor + add_offset;
-            }
-        }
-
-        grid_data_.push_back(var_data);
-        long_name_.push_back(long_name);
-        standard_name_.push_back(standard_name);
-        units_.push_back(units);
-        scale_factor_.push_back(scale_factor);
-        add_offset_.push_back(add_offset);
-        variable_.push_back(variable);
-    }
-}
-#endif
